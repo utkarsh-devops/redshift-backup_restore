@@ -1,0 +1,295 @@
+#!/bin/bash
+ 
+#
+# This script uses AWS API to create RedShift clusters and snapshots.
+#
+ 
+ 
+#----------------- list_snapshots() --------------------------------------------------
+list_snapshots()
+{
+    echo "List of snapshots..."
+    echo "---------------------"
+    echo ""
+ 
+    arr_snapshots=(`aws redshift describe-cluster-snapshots | grep SnapshotIdentifier | awk '{ print $2 }' | sed 's/"//g' `)
+    echo ${arr_snapshots[@]} | tr " " "\n" | nl
+    arr_snapshots_len=${#arr_snapshots[@]}
+    echo ""
+}
+ 
+#----------------- list_clusters() ---------------------------------------------------
+list_clusters()
+{
+    echo "List of clusters..."
+    echo "---------------------"
+    echo ""
+ 
+    arr_clusters=(`aws redshift describe-clusters | grep ClusterIdentifier | awk '{ print $2 }' | sed 's/,//' | sed 's/"//g' `)
+    echo ${arr_clusters[@]} | tr " " "\n" | nl
+    arr_clusters_len=${#arr_clusters[@]}
+    echo ""
+}
+ 
+#----------------- check_confirmation() -------------------------------------------
+check_confirmation()
+{
+    # this loop checks if nothing or empty/white string was inputted
+    while [ 1 ]
+    do
+        printf "Do you want to proceed? (y/n): "
+        read response
+        [ ! -z "$response" ] && break
+    done
+ 
+    [ "$response" ==  "n" ] && continue || [ "$response" !=  "y" ] && break
+}
+ 
+#-------------------------------------------------------------------------------------
+ 
+main_menu()
+{
+    echo "What would you like to do?"
+    echo "=========================="
+    echo ""
+    echo "     (1) List clusters"
+    echo "     (2) List snapshots"
+    echo "     (3) Create cluster from snapshot"
+    echo "     (4) Create snapshot from cluster (also deletes the cluster)"
+    echo "     (5) Quit"
+    echo ""
+}
+ 
+#----------------- start main loop ---------------------------------------------------
+ 
+clear
+ 
+# Display snapshots and clusters
+list_snapshots
+list_clusters
+ 
+# This loop runs continuously until user enters q to quit
+while [ 1 ];
+do
+    # Display menu choices
+    main_menu
+ 
+    # read user choice
+    printf "Choice: "
+    read input
+    echo ""
+ 
+    case "$input" in
+        (1) # display clusters
+            list_clusters
+            continue
+            ;;
+        (2) # display snapshots
+            list_snapshots
+            continue
+            ;;
+        (3) # Create cluster from snapshot
+            echo "You chose to create a cluster from a snapshot.  Which snapshot do you want to use? Number: "
+            echo ""
+            list_snapshots
+ 
+            echo "     b  Back to main menu"
+            echo ""
+            printf "Which snapshot do you want to use to create a cluster? Number: "
+            read input
+            re='^[0-9qb]+$'   # regular expression
+            while ! [[ $input =~ $re ]]
+            do
+                echo ""
+                echo "Not a valid choice.  Please try again."
+                echo ""
+                echo ${arr_snapshots[@]} | tr " " "\n" | nl
+                echo ""
+                echo "     b  Back to main menu"
+                echo ""
+                printf "Which snapshot do you want to use to create a cluster? Number: "
+                read input
+ 
+                # if input contains a space, go back to top of while-loop
+                [[ $input = *[[:space:]]*  ]] && continue
+ 
+            done
+ 
+            [ $input == "q" ] && echo "Goodbye" && exit
+            [ $input == "b" ] && continue
+ 
+            while [ $input -gt $arr_snapshots_len ] || [ $input -lt "1" ] || ! [[ $input =~ $re ]]
+            do
+                echo ""
+                echo "Not a valid choice.  Please try again."
+                echo ""
+                echo ${arr_snapshots[@]} | tr " " "\n" | nl
+                echo ""
+                echo "     b  Back to main menu"
+                echo ""
+                printf "Which snapshot do you want to use to create a cluster? Number: "
+                read input
+            done
+ 
+            choice=`expr $input - 1`
+            snapshot_choice=${arr_snapshots[${choice}]}
+            echo "You chose "$snapshot_choice
+            echo ""
+ 
+            # if user hits return without typing anything, re-ask question.
+            while [ 1 ]
+            do
+                printf "Please enter cluster name: "
+                read cluster_name
+ 
+                # replace any spaces with dash
+                    cluster_name=`echo $cluster_name | sed 's/ /-/g'`
+                [ ! -z "$cluster_name" ] && break
+            done
+ 
+            cmd="aws redshift restore-from-cluster-snapshot --cluster-identifier $cluster_name --snapshot-identifier $snapshot_choice"
+ 
+            echo "About to execute the following command:"
+            echo ""
+            echo $cmd
+            echo ""
+ 
+            # confirm to continue
+            check_confirmation
+ 
+            echo "Creating cluster: $cluster_name.  Please wait.  This will take some time..."
+            eval $cmd
+            echo ""
+ 
+            # display message again after json ouput
+            echo "Creating cluster: $cluster_name.  Please wait.  This will take some time..."
+ 
+            # check when cluster creation is done.  Echo out running counter to show progress.
+            count=0
+            while [ 1 ]
+            do
+               aws redshift describe-clusters --cluster-identifier $cluster_name | grep ClusterStatus | grep available > /dev/null
+               if [ $? -eq 0 ]
+               then
+                break
+               fi
+               count=`expr $count + 1`
+               printf "$count "
+               sleep 2
+            done
+            echo ""
+            echo "Cluster $cluster_name created."
+            echo ""
+ 
+            # show list of clusters. It will now include new cluster.
+            list_clusters
+ 
+            continue
+            ;;
+ 
+        (4) # Create snapshot from cluster
+            echo "You chose to create snapshot from a cluster.  Which cluster do you want to use? Number: "
+            echo ""
+            list_clusters
+ 
+            echo "     b  Back to main menu"
+            echo ""
+            printf "Which cluster do you want to use to create a snapshot? Number: "
+            read input
+            re='^[0-9qb]+$'   # regular expression
+            while ! [[ $input =~ $re ]]
+            do
+                echo ""
+                echo "Not a valid choice.  Please try again."
+                echo ""
+                echo ${arr_clusters[@]} | tr " " "\n" | nl
+                echo ""
+                echo "     b  Back to main menu"
+                echo ""
+                echo ""
+                printf "Which cluster do you want to use to create a snapshot? Number: "
+                read input
+                # if input contains a space, go back to top of while-loop
+                [[ $input = *[[:space:]]*  ]] && continue
+            done
+ 
+            [ $input == "q" ] && echo "Goodbye" && exit
+            [ $input == "b" ] && continue
+ 
+            while [ $input -gt $arr_clusters_len ] || [ $input -lt "1" ] || ! [[ $input =~ $re ]]
+            do
+                #echo "There are only $arr_clusters_len clusters.  Please choose again."
+                echo ""
+                echo "Not a valid choice.  Please try again."
+                echo ""
+                echo ${arr_clusters[@]} | tr " " "\n" | nl
+                echo ""
+                echo "     b  Back to main menu"
+                echo ""
+                printf "Which cluster do you want to use to create a snapshot? Number: "
+ 
+                read input
+            done
+ 
+            choice=`expr $input - 1`
+            cluster_choice=${arr_clusters[${choice}]}
+            echo "You chose "$cluster_choice
+            echo ""
+ 
+            # if user hits return without typing anything, re-ask question.
+            while [ 1 ]
+            do
+                printf "Please enter snapshot name: "
+                read snapshot_name
+ 
+                # replace any spaces with dash
+                    snapshot_name=`echo $snapshot_name | sed 's/ /-/g'`
+                [ ! -z "$snapshot_name" ] && break
+            done
+ 
+            timestamp=`date +'%Y%m%d-%H%M'`
+            cmd="aws redshift delete-cluster --cluster-identifier $cluster_choice --final-cluster-snapshot-identifier $snapshot_name-$timestamp"
+ 
+            echo "About to execute the following command:"
+            echo ""
+            echo $cmd
+            echo ""
+ 
+            # confirm to continue
+            check_confirmation
+ 
+            echo "Creating snapshot: $snapshot_name-$timestamp.  Please wait.  This will take some time..."
+            eval $cmd
+            echo ""
+            # display message again after json ouput
+            echo "Creating snapshot: $snapshot_name-$timestamp.  Please wait.  This will take some time..."
+ 
+            # check when snapshot creation is done.  Echo out running counter to show progress.
+            count=0
+            while [ 1 ]
+            do
+                aws redshift describe-cluster-snapshots --snapshot-identifier $snapshot_name-$timestamp | grep Status | grep available > /dev/null
+ 
+                if [ $? -eq 0 ]
+                then
+                    break
+                fi
+                count=`expr $count + 1`
+                printf "$count "
+                sleep 2
+            done
+            echo ""
+            echo "Snapshot $snapshot_name-$timestamp created."
+            echo ""
+ 
+            # show list of snapshots. It will now include new cluster.
+            list_snapshots
+            continue
+            ;;
+ 
+            ([q5])
+            echo "Goodbye"
+            break
+            ;;
+    esac
+done
